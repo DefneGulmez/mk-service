@@ -1,39 +1,30 @@
-from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+import gradio as gr
 import torch
 import torch.nn as nn
 import cv2
 import numpy as np
 import json
 
-app = FastAPI()
+# ===== Load labels =====
+LABELS = ["Type1", "Type2", "Type3", "Type4", "Type5", "Type6", "Type7"]  # change to your actual labels
 
-# ====== Load labels ======
-with open("labels.json", "r") as f:
-    LABELS = json.load(f)
-
-# ====== Load model ======
+# ===== Load model =====
 from torchvision import models
 model = models.resnet50(weights=None)
 model.fc = nn.Linear(model.fc.in_features, len(LABELS))
 model.load_state_dict(torch.load("best_model.pth", map_location="cpu"))
 model.eval()
 
-# ====== Segmentation & Preprocessing ======
+# ===== Segmentation functions =====
 def segment_megakaryocyte(img_bgr):
-    # HSV thresholds (adjust to your training values)
     nucleus_lower = np.array([120, 40, 40])
     nucleus_upper = np.array([160, 255, 255])
     cytoplasm_lower = np.array([20, 20, 20])
     cytoplasm_upper = np.array([180, 255, 255])
-
     img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     mask_nuc = cv2.inRange(img_hsv, nucleus_lower, nucleus_upper)
     mask_cyt = cv2.inRange(img_hsv, cytoplasm_lower, cytoplasm_upper)
     mask = cv2.bitwise_or(mask_nuc, mask_cyt)
-
-    # Keep largest connected component
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     if num_labels > 1:
         largest = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
@@ -45,7 +36,7 @@ def segment_megakaryocyte(img_bgr):
 def crop_center_on_mask(img_bgr, mask, pad=16):
     ys, xs = np.where(mask > 0)
     if len(xs) == 0:
-        return img_bgr  # fallback
+        return img_bgr
     x1, x2 = xs.min(), xs.max()
     y1, y2 = ys.min(), ys.max()
     w = max(x2 - x1 + 1, y2 - y1 + 1)
@@ -57,14 +48,11 @@ def crop_center_on_mask(img_bgr, mask, pad=16):
     y2 = min(y2 + pad, img_bgr.shape[0] - 1)
     return img_bgr[y1:y2+1, x1:x2+1]
 
-def preprocess(image_bytes):
-    img_array = np.frombuffer(image_bytes, np.uint8)
-    img_bgr = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-
+# ===== Prediction pipeline =====
+def predict_image(image):
+    img_bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
     mask = segment_megakaryocyte(img_bgr)
     centered = crop_center_on_mask(img_bgr, mask)
-
-    # Resize + normalize like training
     rgb = cv2.cvtColor(centered, cv2.COLOR_BGR2RGB)
     rgb = cv2.resize(rgb, (224, 224))
     rgb = rgb.astype(np.float32) / 255.0
@@ -72,21 +60,21 @@ def preprocess(image_bytes):
     std = [0.229, 0.224, 0.225]
     rgb = (rgb - mean) / std
     rgb = np.transpose(rgb, (2, 0, 1))
-    return torch.tensor(rgb).unsqueeze(0)
-
-# ====== API ======
-@app.post("/predict")
-async def predict(file: UploadFile = File(...)):
-    image_bytes = await file.read()
-    x = preprocess(image_bytes)
+    x = torch.tensor(rgb).unsqueeze(0)
     with torch.no_grad():
         logits = model(x)
         probs = torch.softmax(logits, dim=1)[0]
         top = torch.argmax(probs).item()
-    return JSONResponse({
-        "prediction": LABELS[top],
-        "confidence": float(probs[top])
-    })
+    return {LABELS[i]: float(probs[i]) for i in range(len(LABELS))}
 
-# Serve frontend
-app.mount("/", StaticFiles(directory=".", html=True), name="static")
+# ===== Gradio Interface =====
+demo = gr.Interface(
+    fn=predict_image,
+    inputs=gr.Image(type="pil"),
+    outputs=gr.Label(num_top_classes=7),
+    title="Megakaryocyte Classifier",
+    description="Upload an image of a blood smear containing a megakaryocyte to classify it into 1 of 7 types."
+)
+
+if __name__ == "__main__":
+    demo.launch()

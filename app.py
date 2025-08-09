@@ -10,10 +10,7 @@ LABELS = ["Type1", "Type2", "Type3", "Type4", "Type5", "Type6", "Type7"]  # chan
 
 # ===== Load model =====
 from torchvision import models
-model = models.resnet50(weights=None)
-model.fc = nn.Linear(model.fc.in_features, len(LABELS))
-state_dict = torch.load("best_model.pth", map_location="cpu", weights_only=False)
-model.load_state_dict(state_dict)
+model = torch.load("best_model.pth", map_location="cpu", weights_only=False)
 model.eval()
 
 # ===== Segmentation functions =====

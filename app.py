@@ -4,6 +4,7 @@ import torch.nn as nn
 import cv2
 import numpy as np
 import json
+import os
 
 # ===== Load labels =====
 LABELS = ["Type1", "Type2", "Type3", "Type4", "Type5", "Type6", "Type7"]  # change to your actual labels
@@ -83,4 +84,6 @@ demo = gr.Interface(
 )
 
 if __name__ == "__main__":
-    demo.launch()
+    port = int(os.getenv("PORT", "7860"))
+    # bind to 0.0.0.0 for Render/Spaces
+    demo.launch(server_name="0.0.0.0", server_port=port)
